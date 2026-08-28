@@ -24,15 +24,20 @@ var clerkAuthority = builder.Configuration["Clerk:Authority"] ?? builder.Configu
 if (string.IsNullOrEmpty(clerkAuthority))
 {
     // Try to infer from Publishable Key if authority is not set
-    var pubKey = builder.Configuration["Clerk:PublishableKey"] ?? builder.Configuration["CLERK_PUBLISHABLE_KEY"] ?? Environment.GetEnvironmentVariable("CLERK_PUBLISHABLE_KEY");
-    if (!string.IsNullOrEmpty(pubKey) && pubKey.StartsWith("pk_test_"))
+    var base64 = pubKey.Substring(8);
+    // Add padding if missing
+    if (base64.Length % 4 != 0)
     {
-        var base64 = pubKey.Substring(8).Split('$')[0];
-        try {
-            var decoded = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(base64 + "==")); // simple padding
-            clerkAuthority = $"https://{decoded}";
-        } catch {}
+        base64 += new string('=', 4 - (base64.Length % 4));
     }
+    try {
+        var decoded = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(base64));
+        if (decoded.Contains("$"))
+        {
+            decoded = decoded.Split('$')[0];
+        }
+        clerkAuthority = $"https://{decoded}";
+    } catch {}
 }
 
 builder.Services.AddAuthentication(Microsoft.AspNetCore.Authentication.JwtBearer.JwtBearerDefaults.AuthenticationScheme)

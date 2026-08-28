@@ -3,6 +3,7 @@ using MongoDB.Bson.Serialization.Attributes;
 
 namespace TripHaeven.Api.Models;
 
+[MongoDB.Bson.Serialization.Attributes.BsonIgnoreExtraElements]
 public class Room
 {
     [BsonId]

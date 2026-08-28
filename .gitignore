@@ -1,0 +1,15 @@
+# dotnet build artifacts
+[Bb]in/
+[Oo]bj/
+
+# User Secrets and configuration overrides
+appsettings.Development.json
+secrets.json
+
+# IDE settings
+.vs/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates

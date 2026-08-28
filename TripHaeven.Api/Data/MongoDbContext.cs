@@ -13,9 +13,9 @@ public class MongoDbContext
 
         var client = new MongoClient(connectionString);
         
-        // Extract database name from URI, fallback to "test" if not present in URI
+        // Extract database name from URI, fallback to "hotel-booking" if not present in URI
         var mongoUrl = new MongoUrl(connectionString);
-        _database = client.GetDatabase(mongoUrl.DatabaseName ?? "test");
+        _database = client.GetDatabase(mongoUrl.DatabaseName ?? "hotel-booking");
     }
 
     public IMongoCollection<User> Users => _database.GetCollection<User>("users");

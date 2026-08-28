@@ -34,8 +34,9 @@ public class ProtectFilter : IAsyncAuthorizationFilter
             return;
         }
 
-        // Clerk puts the user ID in the NameIdentifier claim
-        var userId = userClaims.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        // Clerk puts the user ID in the sub or NameIdentifier claim
+        var userId = userClaims.FindFirst(ClaimTypes.NameIdentifier)?.Value 
+                     ?? userClaims.FindFirst("sub")?.Value;
 
         if (string.IsNullOrEmpty(userId))
         {

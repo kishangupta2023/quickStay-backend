@@ -1,0 +1,6 @@
+@TripHaeven.Api_HostAddress = http://localhost:5207
+
+GET {{TripHaeven.Api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

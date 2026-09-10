@@ -23,12 +23,19 @@ public class EmailService
 
     public async Task SendEmailAsync(string to, string subject, string text, string html = "")
     {
+        if (string.IsNullOrWhiteSpace(_smtpUser) || string.IsNullOrWhiteSpace(_smtpPass) || string.IsNullOrWhiteSpace(_senderEmail))
+        {
+            _logger.LogWarning("Email sending skipped: SMTP credentials not configured");
+            return;
+        }
+
         try
         {
             using var client = new SmtpClient("smtp-brevo.com", 587)
             {
                 Credentials = new NetworkCredential(_smtpUser, _smtpPass),
-                EnableSsl = true
+                EnableSsl = true,
+                Timeout = 5000
             };
 
             using var mailMessage = new MailMessage

@@ -121,7 +121,18 @@ public class BookingsController : ControllerBase
                 <p>We look forward to welcoming you!</p>
                 <p>If you need to make any changes, feel free to contact us.</p>";
 
-            await _emailService.SendEmailAsync(user.Email, "Hotel Booking Details", "", emailHtml);
+            // Send confirmation email in background so slow SMTP never blocks the booking response
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await _emailService.SendEmailAsync(user.Email, "Hotel Booking Details", "", emailHtml);
+                }
+                catch (Exception emailEx)
+                {
+                    _logger.LogError(emailEx, "Failed to send confirmation email for booking {BookingId}", booking.Id);
+                }
+            });
 
             return Ok(new { success = true, message = "Booking created successfully" });
         }

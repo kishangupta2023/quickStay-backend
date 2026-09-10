@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations;
 using Microsoft.AspNetCore.Mvc;
 using MongoDB.Driver;
 using TripHaeven.Api.Data;
@@ -11,10 +12,12 @@ namespace TripHaeven.Api.Controllers;
 public class HotelsController : ControllerBase
 {
     private readonly MongoDbContext _context;
+    private readonly ILogger<HotelsController> _logger;
 
-    public HotelsController(MongoDbContext context)
+    public HotelsController(MongoDbContext context, ILogger<HotelsController> logger)
     {
         _context = context;
+        _logger = logger;
     }
 
     [HttpPost]
@@ -24,8 +27,12 @@ public class HotelsController : ControllerBase
         try
         {
             var user = HttpContext.Items["User"] as User;
+            if (user == null)
+            {
+                return Unauthorized(new { success = false, message = "User not found" });
+            }
 
-            var existingHotel = await _context.Hotels.Find(h => h.Owner == user!.Id).FirstOrDefaultAsync();
+            var existingHotel = await _context.Hotels.Find(h => h.Owner == user.Id).FirstOrDefaultAsync();
 
             if (existingHotel != null)
             {
@@ -38,7 +45,7 @@ public class HotelsController : ControllerBase
                 Address = request.Address,
                 Contact = request.Contact,
                 City = request.City,
-                Owner = user!.Id
+                Owner = user.Id
             };
 
             await _context.Hotels.InsertOneAsync(hotel);
@@ -47,10 +54,12 @@ public class HotelsController : ControllerBase
             var update = Builders<User>.Update.Set(u => u.Role, "hotelOwner");
             await _context.Users.UpdateOneAsync(u => u.Id == user.Id, update);
 
+            _logger.LogInformation("Hotel {HotelName} registered successfully by user {UserId}", hotel.Name, user.Id);
             return Ok(new { success = true, message = "Hotel registered successfully", hotel });
         }
         catch (Exception ex)
         {
+            _logger.LogError(ex, "Error occurred while registering hotel");
             return Ok(new { success = false, message = ex.Message });
         }
     }
@@ -58,8 +67,15 @@ public class HotelsController : ControllerBase
 
 public class HotelRegistrationRequest
 {
+    [Required]
     public string Name { get; set; } = null!;
+
+    [Required]
     public string Address { get; set; } = null!;
+
+    [Required]
     public string Contact { get; set; } = null!;
+
+    [Required]
     public string City { get; set; } = null!;
 }

@@ -17,10 +17,12 @@ public class ProtectAttribute : TypeFilterAttribute
 public class ProtectFilter : IAsyncAuthorizationFilter
 {
     private readonly MongoDbContext _context;
+    private readonly ILogger<ProtectFilter> _logger;
 
-    public ProtectFilter(MongoDbContext context)
+    public ProtectFilter(MongoDbContext context, ILogger<ProtectFilter> logger)
     {
         _context = context;
+        _logger = logger;
     }
 
     public async Task OnAuthorizationAsync(AuthorizationFilterContext context)
@@ -30,7 +32,7 @@ public class ProtectFilter : IAsyncAuthorizationFilter
             // Get the Authorization header
             var authHeader = context.HttpContext.Request.Headers["Authorization"].ToString();
 
-            if (string.IsNullOrEmpty(authHeader) || !authHeader.StartsWith("Bearer "))
+            if (string.IsNullOrEmpty(authHeader) || !authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
             {
                 context.Result = new JsonResult(new { success = false, message = "not authenticated" })
                 {
@@ -42,12 +44,11 @@ public class ProtectFilter : IAsyncAuthorizationFilter
             // Extract the JWT token
             var token = authHeader.Substring("Bearer ".Length).Trim();
 
-            // Decode the JWT token without signature validation
-            // (Clerk tokens are validated by Clerk's infrastructure, we just need the userId)
             var handler = new JwtSecurityTokenHandler();
 
             if (!handler.CanReadToken(token))
             {
+                _logger.LogWarning("Invalid JWT token format received");
                 context.Result = new JsonResult(new { success = false, message = "invalid token" })
                 {
                     StatusCode = StatusCodes.Status401Unauthorized
@@ -63,6 +64,7 @@ public class ProtectFilter : IAsyncAuthorizationFilter
 
             if (string.IsNullOrEmpty(userId))
             {
+                _logger.LogWarning("Token missing 'sub' claim");
                 context.Result = new JsonResult(new { success = false, message = "not authenticated" })
                 {
                     StatusCode = StatusCodes.Status401Unauthorized
@@ -73,6 +75,7 @@ public class ProtectFilter : IAsyncAuthorizationFilter
             // Check token expiry
             if (jwtToken.ValidTo < DateTime.UtcNow)
             {
+                _logger.LogInformation("Token expired for user {UserId}", userId);
                 context.Result = new JsonResult(new { success = false, message = "token expired" })
                 {
                     StatusCode = StatusCodes.Status401Unauthorized
@@ -85,6 +88,7 @@ public class ProtectFilter : IAsyncAuthorizationFilter
 
             if (user == null)
             {
+                _logger.LogWarning("User {UserId} not found in database", userId);
                 context.Result = new JsonResult(new { success = false, message = "not authenticated" })
                 {
                     StatusCode = StatusCodes.Status401Unauthorized
@@ -97,6 +101,7 @@ public class ProtectFilter : IAsyncAuthorizationFilter
         }
         catch (Exception ex)
         {
+            _logger.LogError(ex, "Authorization filter exception");
             context.Result = new JsonResult(new { success = false, message = "not authenticated" })
             {
                 StatusCode = StatusCodes.Status401Unauthorized

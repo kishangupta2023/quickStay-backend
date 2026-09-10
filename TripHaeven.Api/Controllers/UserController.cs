@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations;
 using Microsoft.AspNetCore.Mvc;
 using MongoDB.Driver;
 using TripHaeven.Api.Data;
@@ -11,10 +12,12 @@ namespace TripHaeven.Api.Controllers;
 public class UserController : ControllerBase
 {
     private readonly MongoDbContext _context;
+    private readonly ILogger<UserController> _logger;
 
-    public UserController(MongoDbContext context)
+    public UserController(MongoDbContext context, ILogger<UserController> logger)
     {
         _context = context;
+        _logger = logger;
     }
 
     [HttpGet]
@@ -22,7 +25,11 @@ public class UserController : ControllerBase
     public IActionResult GetUserData()
     {
         var user = HttpContext.Items["User"] as User;
-        return Ok(new { success = true, role = user!.Role, recentSearchedCities = user.RecentSearchedCities });
+        if (user == null)
+        {
+            return Unauthorized(new { success = false, message = "User not found" });
+        }
+        return Ok(new { success = true, role = user.Role, recentSearchedCities = user.RecentSearchedCities });
     }
 
     [HttpPost("store-recent-search")]
@@ -32,9 +39,14 @@ public class UserController : ControllerBase
         try
         {
             var user = HttpContext.Items["User"] as User;
+            if (user == null)
+            {
+                return Unauthorized(new { success = false, message = "User not found" });
+            }
+
             var city = request.RecentSearchedCity;
 
-            if (user!.RecentSearchedCities.Contains(city))
+            if (user.RecentSearchedCities.Contains(city))
             {
                 return Ok(new { success = true, message = "City already in list" });
             }
@@ -54,6 +66,7 @@ public class UserController : ControllerBase
         }
         catch (Exception ex)
         {
+            _logger.LogError(ex, "Error storing recent search for city {City}", request.RecentSearchedCity);
             return Ok(new { success = false, message = ex.Message });
         }
     }
@@ -61,5 +74,6 @@ public class UserController : ControllerBase
 
 public class StoreSearchRequest
 {
+    [Required]
     public string RecentSearchedCity { get; set; } = null!;
 }

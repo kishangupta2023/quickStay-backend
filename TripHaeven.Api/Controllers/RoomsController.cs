@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations;
 using Microsoft.AspNetCore.Mvc;
 using MongoDB.Driver;
 using TripHaeven.Api.Data;
@@ -13,11 +14,13 @@ public class RoomsController : ControllerBase
 {
     private readonly MongoDbContext _context;
     private readonly CloudinaryService _cloudinaryService;
+    private readonly ILogger<RoomsController> _logger;
 
-    public RoomsController(MongoDbContext context, CloudinaryService cloudinaryService)
+    public RoomsController(MongoDbContext context, CloudinaryService cloudinaryService, ILogger<RoomsController> logger)
     {
         _context = context;
         _cloudinaryService = cloudinaryService;
+        _logger = logger;
     }
 
     [HttpGet]
@@ -60,13 +63,13 @@ public class RoomsController : ControllerBase
                     .ToList();
             }
 
-            // Mongoose default sort is newer first
             populatedRooms = populatedRooms.OrderByDescending(r => r.createdAt).ToList();
 
             return Ok(new { success = true, rooms = populatedRooms });
         }
         catch (Exception ex)
         {
+            _logger.LogError(ex, "Error fetching rooms");
             return Ok(new { success = false, message = ex.Message });
         }
     }
@@ -78,7 +81,12 @@ public class RoomsController : ControllerBase
         try
         {
             var user = HttpContext.Items["User"] as User;
-            var hotel = await _context.Hotels.Find(h => h.Owner == user!.Id).FirstOrDefaultAsync();
+            if (user == null)
+            {
+                return Unauthorized(new { success = false, message = "User not found" });
+            }
+
+            var hotel = await _context.Hotels.Find(h => h.Owner == user.Id).FirstOrDefaultAsync();
 
             if (hotel == null)
             {
@@ -112,6 +120,7 @@ public class RoomsController : ControllerBase
         }
         catch (Exception ex)
         {
+            _logger.LogError(ex, "Error fetching owner rooms");
             return Ok(new { success = false, message = ex.Message });
         }
     }
@@ -123,8 +132,12 @@ public class RoomsController : ControllerBase
         try
         {
             var user = HttpContext.Items["User"] as User;
+            if (user == null)
+            {
+                return Unauthorized(new { success = false, message = "User not found" });
+            }
             
-            var hotel = await _context.Hotels.Find(h => h.Owner == user!.Id).FirstOrDefaultAsync();
+            var hotel = await _context.Hotels.Find(h => h.Owner == user.Id).FirstOrDefaultAsync();
             if (hotel == null)
             {
                 return Ok(new { success = false, message = "No Hotel found" });
@@ -143,7 +156,6 @@ public class RoomsController : ControllerBase
                 }
             }
 
-            // Parse JSON array string
             var amenitiesList = new List<string>();
             if (!string.IsNullOrEmpty(request.Amenities))
             {
@@ -167,11 +179,13 @@ public class RoomsController : ControllerBase
             };
 
             await _context.Rooms.InsertOneAsync(room);
+            _logger.LogInformation("Room {RoomType} created successfully for hotel {HotelId}", room.RoomType, hotel.Id);
 
             return Ok(new { success = true, message = "Room created successfully" });
         }
         catch (Exception ex)
         {
+            _logger.LogError(ex, "Error creating room");
             return Ok(new { success = false, message = ex.Message });
         }
     }
@@ -191,10 +205,12 @@ public class RoomsController : ControllerBase
             var update = Builders<Room>.Update.Set(r => r.IsAvailable, !room.IsAvailable);
             await _context.Rooms.UpdateOneAsync(r => r.Id == request.RoomId, update);
 
+            _logger.LogInformation("Room availability updated for {RoomId}", request.RoomId);
             return Ok(new { success = true, message = "Room availability Updated" });
         }
         catch (Exception ex)
         {
+            _logger.LogError(ex, "Error toggling room availability for {RoomId}", request.RoomId);
             return Ok(new { success = false, message = ex.Message });
         }
     }
@@ -202,12 +218,17 @@ public class RoomsController : ControllerBase
 
 public class CreateRoomRequest
 {
+    [Required]
     public string RoomType { get; set; } = null!;
+
+    [Range(0, double.MaxValue, ErrorMessage = "Price must be positive")]
     public decimal PricePerNight { get; set; }
-    public string Amenities { get; set; } = null!; // JSON array string
+
+    public string Amenities { get; set; } = null!;
 }
 
 public class ToggleAvailabilityRequest
 {
+    [Required]
     public string RoomId { get; set; } = null!;
 }

@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations;
 using Microsoft.AspNetCore.Mvc;
 using MongoDB.Driver;
 using TripHaeven.Api.Data;
@@ -14,12 +15,14 @@ public class BookingsController : ControllerBase
     private readonly MongoDbContext _context;
     private readonly StripeService _stripeService;
     private readonly EmailService _emailService;
+    private readonly ILogger<BookingsController> _logger;
 
-    public BookingsController(MongoDbContext context, StripeService stripeService, EmailService emailService)
+    public BookingsController(MongoDbContext context, StripeService stripeService, EmailService emailService, ILogger<BookingsController> logger)
     {
         _context = context;
         _stripeService = stripeService;
         _emailService = emailService;
+        _logger = logger;
     }
 
     private async Task<bool> CheckAvailability(DateTime checkInDate, DateTime checkOutDate, string room)
@@ -35,8 +38,9 @@ public class BookingsController : ControllerBase
 
             return bookings.Count == 0;
         }
-        catch
+        catch (Exception ex)
         {
+            _logger.LogError(ex, "Error checking availability for room {Room}", room);
             return false;
         }
     }
@@ -51,6 +55,7 @@ public class BookingsController : ControllerBase
         }
         catch (Exception ex)
         {
+            _logger.LogError(ex, "Error in CheckAvailabilityAPI");
             return Ok(new { success = false, message = ex.Message });
         }
     }
@@ -62,6 +67,10 @@ public class BookingsController : ControllerBase
         try
         {
             var user = HttpContext.Items["User"] as User;
+            if (user == null)
+            {
+                return Unauthorized(new { success = false, message = "User not found" });
+            }
 
             var isAvailable = await CheckAvailability(request.CheckInDate, request.CheckOutDate, request.Room);
             if (!isAvailable)
@@ -83,7 +92,7 @@ public class BookingsController : ControllerBase
 
             var booking = new Booking
             {
-                User = user!.Id,
+                User = user.Id,
                 Room = request.Room,
                 Hotel = roomData.Hotel,
                 CheckInDate = request.CheckInDate,
@@ -96,6 +105,7 @@ public class BookingsController : ControllerBase
             };
 
             await _context.Bookings.InsertOneAsync(booking);
+            _logger.LogInformation("Booking {BookingId} created for user {UserId}", booking.Id, user.Id);
 
             var emailHtml = $@"
                 <h2>Your Booking Details</h2>
@@ -115,8 +125,9 @@ public class BookingsController : ControllerBase
 
             return Ok(new { success = true, message = "Booking created successfully" });
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            _logger.LogError(ex, "Failed to create booking");
             return Ok(new { success = false, message = "Failed to create booking" });
         }
     }
@@ -128,7 +139,12 @@ public class BookingsController : ControllerBase
         try
         {
             var user = HttpContext.Items["User"] as User;
-            var bookings = await _context.Bookings.Find(b => b.User == user!.Id)
+            if (user == null)
+            {
+                return Unauthorized(new { success = false, message = "User not found" });
+            }
+
+            var bookings = await _context.Bookings.Find(b => b.User == user.Id)
                 .SortByDescending(b => b.CreatedAt)
                 .ToListAsync();
 
@@ -174,8 +190,9 @@ public class BookingsController : ControllerBase
 
             return Ok(new { success = true, bookings = populatedBookings });
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            _logger.LogError(ex, "Failed to fetch user bookings");
             return Ok(new { success = false, message = "Failed to fetch bookings" });
         }
     }
@@ -187,7 +204,12 @@ public class BookingsController : ControllerBase
         try
         {
             var user = HttpContext.Items["User"] as User;
-            var hotel = await _context.Hotels.Find(h => h.Owner == user!.Id).FirstOrDefaultAsync();
+            if (user == null)
+            {
+                return Unauthorized(new { success = false, message = "User not found" });
+            }
+
+            var hotel = await _context.Hotels.Find(h => h.Owner == user.Id).FirstOrDefaultAsync();
 
             if (hotel == null)
             {
@@ -253,8 +275,9 @@ public class BookingsController : ControllerBase
                 } 
             });
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            _logger.LogError(ex, "Failed to fetch hotel bookings");
             return Ok(new { success = false, message = "Failed to fetch bookings" });
         }
     }
@@ -286,8 +309,9 @@ public class BookingsController : ControllerBase
 
             return Ok(new { success = true, url = session.Url });
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            _logger.LogError(ex, "Payment creation failed for booking {BookingId}", request.BookingId);
             return Ok(new { success = false, message = "Payment Failed" });
         }
     }
@@ -295,20 +319,33 @@ public class BookingsController : ControllerBase
 
 public class CheckAvailabilityRequest
 {
+    [Required]
     public string Room { get; set; } = null!;
+
+    [Required]
     public DateTime CheckInDate { get; set; }
+
+    [Required]
     public DateTime CheckOutDate { get; set; }
 }
 
 public class CreateBookingRequest
 {
+    [Required]
     public string Room { get; set; } = null!;
+
+    [Required]
     public DateTime CheckInDate { get; set; }
+
+    [Required]
     public DateTime CheckOutDate { get; set; }
+
+    [Range(1, 100)]
     public int Guests { get; set; }
 }
 
 public class StripePaymentRequest
 {
+    [Required]
     public string BookingId { get; set; } = null!;
 }

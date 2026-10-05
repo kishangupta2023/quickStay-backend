@@ -127,7 +127,7 @@ public class WebhooksController : ControllerBase
         try
         {
             var signatureHeader = Request.Headers["Stripe-Signature"];
-            var stripeEvent = EventUtility.ConstructEvent(json, signatureHeader, _stripeWebhookSecret);
+            var stripeEvent = EventUtility.ConstructEvent(json, signatureHeader, _stripeWebhookSecret, throwOnApiVersionMismatch: false);
 
             if (stripeEvent.Type == EventTypes.CheckoutSessionCompleted)
             {

@@ -142,35 +142,55 @@ public class WebhooksController : ControllerBase
                     await _context.Bookings.UpdateOneAsync(b => b.Id == bookingId, update);
                     _logger.LogInformation("Booking {BookingId} confirmed via Stripe webhook", bookingId);
                     
-                    var booking = await _context.Bookings.Find(b => b.Id == bookingId).FirstOrDefaultAsync();
-                    if (booking == null)
+                    // Send payment confirmation email in background so slow SMTP never blocks the webhook response
+                    _ = Task.Run(async () =>
                     {
-                        _logger.LogWarning("Booking {BookingId} not found in database during Stripe webhook", bookingId);
-                    }
-                    else
-                    {
-                        var user = await _context.Users.Find(u => u.Id == booking.User).FirstOrDefaultAsync();
-                        var recipientEmail = !string.IsNullOrWhiteSpace(user?.Email) 
-                            ? user.Email 
-                            : (!string.IsNullOrWhiteSpace(session.CustomerDetails?.Email) 
-                                ? session.CustomerDetails.Email 
-                                : session.CustomerEmail);
-
-                        var recipientName = !string.IsNullOrWhiteSpace(user?.Username)
-                            ? user.Username
-                            : (!string.IsNullOrWhiteSpace(session.CustomerDetails?.Name)
-                                ? session.CustomerDetails.Name
-                                : "Valued Guest");
-
-                        if (string.IsNullOrWhiteSpace(recipientEmail))
+                        try
                         {
-                            _logger.LogWarning("Cannot send payment confirmation email: No email address found for booking {BookingId}", bookingId);
-                        }
-                        else
-                        {
-                            var hotel = await _context.Hotels.Find(h => h.Id == booking.Hotel).FirstOrDefaultAsync();
-                            var hotelName = hotel?.Name ?? "QuickStay Hotel";
-                            var hotelAddress = hotel?.Address ?? "";
+                            var booking = await _context.Bookings.Find(b => b.Id == bookingId).FirstOrDefaultAsync();
+                            if (booking == null)
+                            {
+                                _logger.LogWarning("Booking {BookingId} not found in database during Stripe webhook email processing", bookingId);
+                                return;
+                            }
+
+                            var user = await _context.Users.Find(u => u.Id == booking.User).FirstOrDefaultAsync();
+                            var recipientEmail = !string.IsNullOrWhiteSpace(user?.Email) 
+                                ? user.Email 
+                                : (!string.IsNullOrWhiteSpace(session.CustomerDetails?.Email) 
+                                    ? session.CustomerDetails.Email 
+                                    : session.CustomerEmail);
+
+                            var recipientName = !string.IsNullOrWhiteSpace(user?.Username)
+                                ? user.Username
+                                : (!string.IsNullOrWhiteSpace(session.CustomerDetails?.Name)
+                                    ? session.CustomerDetails.Name
+                                    : "Valued Guest");
+
+                            if (string.IsNullOrWhiteSpace(recipientEmail))
+                            {
+                                _logger.LogWarning("Cannot send payment confirmation email: No email address found for booking {BookingId}", bookingId);
+                                return;
+                            }
+
+                            string hotelName = "QuickStay Hotel";
+                            string hotelAddress = "";
+                            try
+                            {
+                                if (!string.IsNullOrEmpty(booking.Hotel))
+                                {
+                                    var hotel = await _context.Hotels.Find(h => h.Id == booking.Hotel).FirstOrDefaultAsync();
+                                    if (hotel != null)
+                                    {
+                                        hotelName = hotel.Name ?? hotelName;
+                                        hotelAddress = hotel.Address ?? "";
+                                    }
+                                }
+                            }
+                            catch (Exception hex)
+                            {
+                                _logger.LogWarning(hex, "Could not fetch hotel details for booking {BookingId}", bookingId);
+                            }
 
                             var emailHtml = $@"
                                 <h2>Payment Received & Booking Confirmed!</h2>
@@ -191,20 +211,19 @@ public class WebhooksController : ControllerBase
 
                             _logger.LogInformation("Sending payment confirmation email to {RecipientEmail} for booking {BookingId}", recipientEmail, booking.Id);
 
-                            try
-                            {
-                                await _emailService.SendEmailAsync(
-                                    recipientEmail, 
-                                    "Booking & Payment Confirmed - TripHaeven QuickStay", 
-                                    $"Your payment for booking {bookingId} has been confirmed!", 
-                                    emailHtml);
-                            }
-                            catch (Exception emailEx)
-                            {
-                                _logger.LogError(emailEx, "Failed to send payment confirmation email for booking {BookingId}", booking.Id);
-                            }
+                            await _emailService.SendEmailAsync(
+                                recipientEmail, 
+                                "Booking & Payment Confirmed - TripHaeven QuickStay", 
+                                $"Your payment for booking {bookingId} has been confirmed!", 
+                                emailHtml);
+
+                            _logger.LogInformation("Payment confirmation email successfully sent to {RecipientEmail}", recipientEmail);
                         }
-                    }
+                        catch (Exception emailEx)
+                        {
+                            _logger.LogError(emailEx, "Failed to send payment confirmation email for booking {BookingId}", bookingId);
+                        }
+                    });
                 }
             }
 

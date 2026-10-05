@@ -29,6 +29,13 @@ public class StripeService
         var options = new SessionCreateOptions
         {
             PaymentMethodTypes = new List<string> { "card" },
+            PaymentIntentData = new SessionPaymentIntentDataOptions
+            {
+                Metadata = new Dictionary<string, string>
+                {
+                    { "bookingId", bookingId }
+                }
+            },
             LineItems = new List<SessionLineItemOptions>
             {
                 new SessionLineItemOptions

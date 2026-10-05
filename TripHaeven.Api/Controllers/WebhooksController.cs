@@ -138,102 +138,140 @@ public class WebhooksController : ControllerBase
         {
             var stripeEvent = EventUtility.ConstructEvent(json, signatureHeader, _stripeWebhookSecret, throwOnApiVersionMismatch: false);
 
+            _logger.LogInformation("Processing Stripe event: {EventType}, EventId: {EventId}", stripeEvent.Type, stripeEvent.Id);
+
+            string? bookingId = null;
+            string? customerEmail = null;
+            string? customerName = null;
+
             if (stripeEvent.Type == EventTypes.CheckoutSessionCompleted)
             {
                 var session = stripeEvent.Data.Object as Stripe.Checkout.Session;
-                if (session != null && session.Metadata.TryGetValue("bookingId", out var bookingId) && !string.IsNullOrEmpty(bookingId))
+                if (session != null)
                 {
-                    var update = Builders<Booking>.Update
-                        .Set(b => b.Status, "confirmed")
-                        .Set(b => b.IsPaid, true)
-                        .Set(b => b.PaymentMethod, "Stripe");
+                    session.Metadata?.TryGetValue("bookingId", out bookingId);
+                    customerEmail = session.CustomerDetails?.Email ?? session.CustomerEmail;
+                    customerName = session.CustomerDetails?.Name;
+                }
+            }
+            else if (stripeEvent.Type == EventTypes.PaymentIntentSucceeded)
+            {
+                var paymentIntent = stripeEvent.Data.Object as Stripe.PaymentIntent;
+                if (paymentIntent != null)
+                {
+                    paymentIntent.Metadata?.TryGetValue("bookingId", out bookingId);
+                    customerEmail = paymentIntent.ReceiptEmail;
+                }
+            }
+            else if (stripeEvent.Type == EventTypes.ChargeSucceeded)
+            {
+                var charge = stripeEvent.Data.Object as Stripe.Charge;
+                if (charge != null)
+                {
+                    charge.Metadata?.TryGetValue("bookingId", out bookingId);
+                    customerEmail = charge.BillingDetails?.Email ?? charge.ReceiptEmail;
+                    customerName = charge.BillingDetails?.Name;
+                }
+            }
 
-                    await _context.Bookings.UpdateOneAsync(b => b.Id == bookingId, update);
-                    _logger.LogInformation("Booking {BookingId} confirmed via Stripe webhook", bookingId);
-                    
-                    // Send payment confirmation email in background so slow SMTP never blocks the webhook response
-                    _ = Task.Run(async () =>
+            if (!string.IsNullOrEmpty(bookingId))
+            {
+                var booking = await _context.Bookings.Find(b => b.Id == bookingId).FirstOrDefaultAsync();
+                if (booking == null)
+                {
+                    _logger.LogWarning("Booking {BookingId} not found in database for event {EventType}", bookingId, stripeEvent.Type);
+                    return Ok();
+                }
+
+                if (booking.IsPaid)
+                {
+                    _logger.LogInformation("Booking {BookingId} is already marked as paid. Skipping duplicate processing.", bookingId);
+                    return Ok();
+                }
+
+                var update = Builders<Booking>.Update
+                    .Set(b => b.Status, "confirmed")
+                    .Set(b => b.IsPaid, true)
+                    .Set(b => b.PaymentMethod, "Stripe");
+
+                await _context.Bookings.UpdateOneAsync(b => b.Id == bookingId, update);
+                _logger.LogInformation("Booking {BookingId} confirmed and marked as Paid via Stripe {EventType}", bookingId, stripeEvent.Type);
+
+                // Send payment confirmation email in background so slow SMTP never blocks the webhook response
+                _ = Task.Run(async () =>
+                {
+                    try
                     {
+                        var user = await _context.Users.Find(u => u.Id == booking.User).FirstOrDefaultAsync();
+                        var recipientEmail = !string.IsNullOrWhiteSpace(user?.Email) 
+                            ? user.Email 
+                            : (!string.IsNullOrWhiteSpace(customerEmail) ? customerEmail : string.Empty);
+
+                        var recipientName = !string.IsNullOrWhiteSpace(user?.Username)
+                            ? user.Username
+                            : (!string.IsNullOrWhiteSpace(customerName) ? customerName : "Valued Guest");
+
+                        if (string.IsNullOrWhiteSpace(recipientEmail))
+                        {
+                            _logger.LogWarning("Cannot send payment confirmation email: No email address found for booking {BookingId}", bookingId);
+                            return;
+                        }
+
+                        string hotelName = "QuickStay Hotel";
+                        string hotelAddress = "";
                         try
                         {
-                            var booking = await _context.Bookings.Find(b => b.Id == bookingId).FirstOrDefaultAsync();
-                            if (booking == null)
+                            if (!string.IsNullOrEmpty(booking.Hotel))
                             {
-                                _logger.LogWarning("Booking {BookingId} not found in database during Stripe webhook email processing", bookingId);
-                                return;
-                            }
-
-                            var user = await _context.Users.Find(u => u.Id == booking.User).FirstOrDefaultAsync();
-                            var recipientEmail = !string.IsNullOrWhiteSpace(user?.Email) 
-                                ? user.Email 
-                                : (!string.IsNullOrWhiteSpace(session.CustomerDetails?.Email) 
-                                    ? session.CustomerDetails.Email 
-                                    : session.CustomerEmail);
-
-                            var recipientName = !string.IsNullOrWhiteSpace(user?.Username)
-                                ? user.Username
-                                : (!string.IsNullOrWhiteSpace(session.CustomerDetails?.Name)
-                                    ? session.CustomerDetails.Name
-                                    : "Valued Guest");
-
-                            if (string.IsNullOrWhiteSpace(recipientEmail))
-                            {
-                                _logger.LogWarning("Cannot send payment confirmation email: No email address found for booking {BookingId}", bookingId);
-                                return;
-                            }
-
-                            string hotelName = "QuickStay Hotel";
-                            string hotelAddress = "";
-                            try
-                            {
-                                if (!string.IsNullOrEmpty(booking.Hotel))
+                                var hotel = await _context.Hotels.Find(h => h.Id == booking.Hotel).FirstOrDefaultAsync();
+                                if (hotel != null)
                                 {
-                                    var hotel = await _context.Hotels.Find(h => h.Id == booking.Hotel).FirstOrDefaultAsync();
-                                    if (hotel != null)
-                                    {
-                                        hotelName = hotel.Name ?? hotelName;
-                                        hotelAddress = hotel.Address ?? "";
-                                    }
+                                    hotelName = hotel.Name ?? hotelName;
+                                    hotelAddress = hotel.Address ?? "";
                                 }
                             }
-                            catch (Exception hex)
-                            {
-                                _logger.LogWarning(hex, "Could not fetch hotel details for booking {BookingId}", bookingId);
-                            }
-
-                            var emailHtml = $@"
-                                <h2>Payment Received & Booking Confirmed!</h2>
-                                <p>Dear {recipientName},</p>
-                                <p>We have successfully received your payment! Your reservation is now confirmed.</p>
-                                <ul>
-                                  <li><strong>Booking ID:</strong> {booking.Id}</li>
-                                  <li><strong>Hotel Name:</strong> {hotelName}</li>
-                                  <li><strong>Location:</strong> {hotelAddress}</li>
-                                  <li><strong>Check-In Date:</strong> {booking.CheckInDate.ToShortDateString()}</li>
-                                  <li><strong>Check-Out Date:</strong> {booking.CheckOutDate.ToShortDateString()}</li>
-                                  <li><strong>Amount Paid:</strong> ${booking.TotalPrice}</li>
-                                  <li><strong>Payment Method:</strong> Stripe</li>
-                                  <li><strong>Payment Status:</strong> Confirmed & Paid</li>
-                                </ul>
-                                <p>Thank you for choosing TripHaeven QuickStay. We look forward to welcoming you!</p>
-                                <p>If you have any questions, feel free to contact us.</p>";
-
-                            _logger.LogInformation("Sending payment confirmation email to {RecipientEmail} for booking {BookingId}", recipientEmail, booking.Id);
-
-                            await _emailService.SendEmailAsync(
-                                recipientEmail, 
-                                "Booking & Payment Confirmed - TripHaeven QuickStay", 
-                                $"Your payment for booking {bookingId} has been confirmed!", 
-                                emailHtml);
-
-                            _logger.LogInformation("Payment confirmation email successfully sent to {RecipientEmail}", recipientEmail);
                         }
-                        catch (Exception emailEx)
+                        catch (Exception hex)
                         {
-                            _logger.LogError(emailEx, "Failed to send payment confirmation email for booking {BookingId}", bookingId);
+                            _logger.LogWarning(hex, "Could not fetch hotel details for booking {BookingId}", bookingId);
                         }
-                    });
-                }
+
+                        var emailHtml = $@"
+                            <h2>Payment Received & Booking Confirmed!</h2>
+                            <p>Dear {recipientName},</p>
+                            <p>We have successfully received your payment! Your reservation is now confirmed.</p>
+                            <ul>
+                              <li><strong>Booking ID:</strong> {booking.Id}</li>
+                              <li><strong>Hotel Name:</strong> {hotelName}</li>
+                              <li><strong>Location:</strong> {hotelAddress}</li>
+                              <li><strong>Check-In Date:</strong> {booking.CheckInDate.ToShortDateString()}</li>
+                              <li><strong>Check-Out Date:</strong> {booking.CheckOutDate.ToShortDateString()}</li>
+                              <li><strong>Amount Paid:</strong> ${booking.TotalPrice}</li>
+                              <li><strong>Payment Method:</strong> Stripe</li>
+                              <li><strong>Payment Status:</strong> Confirmed & Paid</li>
+                            </ul>
+                            <p>Thank you for choosing TripHaeven QuickStay. We look forward to welcoming you!</p>
+                            <p>If you have any questions, feel free to contact us.</p>";
+
+                        _logger.LogInformation("Sending payment confirmation email to {RecipientEmail} for booking {BookingId}", recipientEmail, booking.Id);
+
+                        await _emailService.SendEmailAsync(
+                            recipientEmail, 
+                            "Booking & Payment Confirmed - TripHaeven QuickStay", 
+                            $"Your payment for booking {bookingId} has been confirmed!", 
+                            emailHtml);
+
+                        _logger.LogInformation("Payment confirmation email successfully sent to {RecipientEmail}", recipientEmail);
+                    }
+                    catch (Exception emailEx)
+                    {
+                        _logger.LogError(emailEx, "Failed to send payment confirmation email for booking {BookingId}", bookingId);
+                    }
+                });
+            }
+            else
+            {
+                _logger.LogInformation("Stripe event {EventType} received without bookingId metadata", stripeEvent.Type);
             }
 
             return Ok();

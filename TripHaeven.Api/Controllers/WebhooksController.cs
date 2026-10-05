@@ -143,10 +143,30 @@ public class WebhooksController : ControllerBase
                     _logger.LogInformation("Booking {BookingId} confirmed via Stripe webhook", bookingId);
                     
                     var booking = await _context.Bookings.Find(b => b.Id == bookingId).FirstOrDefaultAsync();
-                    if (booking != null)
+                    if (booking == null)
+                    {
+                        _logger.LogWarning("Booking {BookingId} not found in database during Stripe webhook", bookingId);
+                    }
+                    else
                     {
                         var user = await _context.Users.Find(u => u.Id == booking.User).FirstOrDefaultAsync();
-                        if (user != null && !string.IsNullOrWhiteSpace(user.Email))
+                        var recipientEmail = !string.IsNullOrWhiteSpace(user?.Email) 
+                            ? user.Email 
+                            : (!string.IsNullOrWhiteSpace(session.CustomerDetails?.Email) 
+                                ? session.CustomerDetails.Email 
+                                : session.CustomerEmail);
+
+                        var recipientName = !string.IsNullOrWhiteSpace(user?.Username)
+                            ? user.Username
+                            : (!string.IsNullOrWhiteSpace(session.CustomerDetails?.Name)
+                                ? session.CustomerDetails.Name
+                                : "Valued Guest");
+
+                        if (string.IsNullOrWhiteSpace(recipientEmail))
+                        {
+                            _logger.LogWarning("Cannot send payment confirmation email: No email address found for booking {BookingId}", bookingId);
+                        }
+                        else
                         {
                             var hotel = await _context.Hotels.Find(h => h.Id == booking.Hotel).FirstOrDefaultAsync();
                             var hotelName = hotel?.Name ?? "QuickStay Hotel";
@@ -154,7 +174,7 @@ public class WebhooksController : ControllerBase
 
                             var emailHtml = $@"
                                 <h2>Payment Received & Booking Confirmed!</h2>
-                                <p>Dear {user.Username},</p>
+                                <p>Dear {recipientName},</p>
                                 <p>We have successfully received your payment! Your reservation is now confirmed.</p>
                                 <ul>
                                   <li><strong>Booking ID:</strong> {booking.Id}</li>
@@ -169,11 +189,20 @@ public class WebhooksController : ControllerBase
                                 <p>Thank you for choosing TripHaeven QuickStay. We look forward to welcoming you!</p>
                                 <p>If you have any questions, feel free to contact us.</p>";
 
-                            await _emailService.SendEmailAsync(
-                                user.Email, 
-                                "Booking & Payment Confirmed - TripHaeven QuickStay", 
-                                $"Your payment for booking {bookingId} has been confirmed!", 
-                                emailHtml);
+                            _logger.LogInformation("Sending payment confirmation email to {RecipientEmail} for booking {BookingId}", recipientEmail, booking.Id);
+
+                            try
+                            {
+                                await _emailService.SendEmailAsync(
+                                    recipientEmail, 
+                                    "Booking & Payment Confirmed - TripHaeven QuickStay", 
+                                    $"Your payment for booking {bookingId} has been confirmed!", 
+                                    emailHtml);
+                            }
+                            catch (Exception emailEx)
+                            {
+                                _logger.LogError(emailEx, "Failed to send payment confirmation email for booking {BookingId}", booking.Id);
+                            }
                         }
                     }
                 }

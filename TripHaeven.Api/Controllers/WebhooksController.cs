@@ -44,6 +44,7 @@ public class WebhooksController : ControllerBase
     }
 
     [HttpPost("clerk")]
+    [HttpPost("webhooks/clerk")]
     public async Task<IActionResult> ClerkWebhook()
     {
         var json = await new StreamReader(HttpContext.Request.Body).ReadToEndAsync();
@@ -118,6 +119,7 @@ public class WebhooksController : ControllerBase
     }
 
     [HttpPost("stripe")]
+    [HttpPost("webhooks/stripe")]
     public async Task<IActionResult> StripeWebhook()
     {
         var json = await new StreamReader(HttpContext.Request.Body).ReadToEndAsync();
@@ -144,9 +146,34 @@ public class WebhooksController : ControllerBase
                     if (booking != null)
                     {
                         var user = await _context.Users.Find(u => u.Id == booking.User).FirstOrDefaultAsync();
-                        if (user != null)
+                        if (user != null && !string.IsNullOrWhiteSpace(user.Email))
                         {
-                            await _emailService.SendEmailAsync(user.Email, "Booking Confirmed - QuickStay", $"Your booking {bookingId} has been confirmed!");
+                            var hotel = await _context.Hotels.Find(h => h.Id == booking.Hotel).FirstOrDefaultAsync();
+                            var hotelName = hotel?.Name ?? "QuickStay Hotel";
+                            var hotelAddress = hotel?.Address ?? "";
+
+                            var emailHtml = $@"
+                                <h2>Payment Received & Booking Confirmed!</h2>
+                                <p>Dear {user.Username},</p>
+                                <p>We have successfully received your payment! Your reservation is now confirmed.</p>
+                                <ul>
+                                  <li><strong>Booking ID:</strong> {booking.Id}</li>
+                                  <li><strong>Hotel Name:</strong> {hotelName}</li>
+                                  <li><strong>Location:</strong> {hotelAddress}</li>
+                                  <li><strong>Check-In Date:</strong> {booking.CheckInDate.ToShortDateString()}</li>
+                                  <li><strong>Check-Out Date:</strong> {booking.CheckOutDate.ToShortDateString()}</li>
+                                  <li><strong>Amount Paid:</strong> ${booking.TotalPrice}</li>
+                                  <li><strong>Payment Method:</strong> Stripe</li>
+                                  <li><strong>Payment Status:</strong> Confirmed & Paid</li>
+                                </ul>
+                                <p>Thank you for choosing TripHaeven QuickStay. We look forward to welcoming you!</p>
+                                <p>If you have any questions, feel free to contact us.</p>";
+
+                            await _emailService.SendEmailAsync(
+                                user.Email, 
+                                "Booking & Payment Confirmed - TripHaeven QuickStay", 
+                                $"Your payment for booking {bookingId} has been confirmed!", 
+                                emailHtml);
                         }
                     }
                 }

@@ -31,6 +31,8 @@ public class EmailSettings
     public string SenderEmail { get; set; } = string.Empty;
     public string SmtpUser { get; set; } = string.Empty;
     public string SmtpPass { get; set; } = string.Empty;
+    public string SmtpHost { get; set; } = "smtp-relay.brevo.com";
+    public int SmtpPort { get; set; } = 587;
 }
 
 public class MongoDbSettings

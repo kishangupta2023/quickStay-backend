@@ -110,13 +110,16 @@ public class BookingsController : ControllerBase
             var emailHtml = $@"
                 <h2>Your Booking Details</h2>
                 <p>Dear {user.Username},</p>
-                <p>Thank you for your booking! Here are your details:</p>
+                <p>Thank you for your booking! Here are your reservation details:</p>
                 <ul>
                   <li><strong>Booking ID:</strong> {booking.Id}</li>
                   <li><strong>Hotel Name:</strong> {hotelData.Name}</li>
                   <li><strong>Location:</strong> {hotelData.Address}</li>
-                  <li><strong>Date:</strong> {booking.CheckInDate.ToShortDateString()}</li>
-                  <li><strong>Booking Amount:</strong> $ {booking.TotalPrice}</li>
+                  <li><strong>Check-In Date:</strong> {booking.CheckInDate.ToShortDateString()}</li>
+                  <li><strong>Check-Out Date:</strong> {booking.CheckOutDate.ToShortDateString()}</li>
+                  <li><strong>Guests:</strong> {booking.Guests}</li>
+                  <li><strong>Total Amount:</strong> ${booking.TotalPrice}</li>
+                  <li><strong>Payment Status:</strong> Pending ({booking.PaymentMethod})</li>
                 </ul>
                 <p>We look forward to welcoming you!</p>
                 <p>If you need to make any changes, feel free to contact us.</p>";

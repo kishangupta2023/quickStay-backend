@@ -34,13 +34,17 @@ public class WebhooksController : ControllerBase
         _logger = logger;
         _emailService = emailService;
 
-        _stripeWebhookSecret = !string.IsNullOrWhiteSpace(stripeOptions.Value.WebhookSecret)
-            ? stripeOptions.Value.WebhookSecret
-            : (configuration["STRIPE_WEBHOOK_SECRET"] ?? Environment.GetEnvironmentVariable("STRIPE_WEBHOOK_SECRET") ?? string.Empty);
+        var stripeSecret = configuration["STRIPE_WEBHOOK_SECRET"] 
+            ?? Environment.GetEnvironmentVariable("STRIPE_WEBHOOK_SECRET")
+            ?? configuration["Stripe:WebhookSecret"]
+            ?? stripeOptions.Value.WebhookSecret;
+        _stripeWebhookSecret = stripeSecret?.Trim() ?? string.Empty;
 
-        _clerkWebhookSecret = !string.IsNullOrWhiteSpace(clerkOptions.Value.WebhookSecret)
-            ? clerkOptions.Value.WebhookSecret
-            : (configuration["CLERK_WEBHOOK_SECRET"] ?? Environment.GetEnvironmentVariable("CLERK_WEBHOOK_SECRET") ?? string.Empty);
+        var clerkSecret = configuration["CLERK_WEBHOOK_SECRET"] 
+            ?? Environment.GetEnvironmentVariable("CLERK_WEBHOOK_SECRET")
+            ?? configuration["Clerk:WebhookSecret"]
+            ?? clerkOptions.Value.WebhookSecret;
+        _clerkWebhookSecret = clerkSecret?.Trim() ?? string.Empty;
     }
 
     [HttpPost("clerk")]
@@ -123,10 +127,15 @@ public class WebhooksController : ControllerBase
     public async Task<IActionResult> StripeWebhook()
     {
         var json = await new StreamReader(HttpContext.Request.Body).ReadToEndAsync();
+        var signatureHeader = Request.Headers["Stripe-Signature"].ToString();
+
+        _logger.LogInformation("Stripe webhook received. Body length: {BodyLength}, HasSignature: {HasSig}, SecretConfigured: {HasSecret}", 
+            json?.Length ?? 0, 
+            !string.IsNullOrEmpty(signatureHeader),
+            !string.IsNullOrEmpty(_stripeWebhookSecret));
 
         try
         {
-            var signatureHeader = Request.Headers["Stripe-Signature"];
             var stripeEvent = EventUtility.ConstructEvent(json, signatureHeader, _stripeWebhookSecret, throwOnApiVersionMismatch: false);
 
             if (stripeEvent.Type == EventTypes.CheckoutSessionCompleted)
@@ -231,12 +240,12 @@ public class WebhooksController : ControllerBase
         }
         catch (StripeException ex)
         {
-            _logger.LogWarning(ex, "Stripe signature validation failed");
+            _logger.LogWarning(ex, "Stripe signature validation failed: {ErrorMessage}", ex.Message);
             return BadRequest();
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error processing Stripe webhook");
+            _logger.LogError(ex, "Error processing Stripe webhook: {ErrorMessage}", ex.Message);
             return StatusCode(500);
         }
     }
